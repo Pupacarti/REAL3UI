@@ -10,7 +10,7 @@ local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
 
 -- ==========================================
--- [1] ระบบ Anti-AFK (กันหลุดตอนพับจอแบบ Windowed)
+-- [1] ระบบ Anti-AFK (กันหลุดตอนพับจอ)
 -- ==========================================
 LocalPlayer.Idled:Connect(function()
     VirtualUser:Button2Down(Vector2.new(0,0), Camera.CFrame)
@@ -20,7 +20,7 @@ end)
 if setfpscap then setfpscap(60) end
 
 -- ==========================================
--- [2] ตัวแปรควบคุม & สถิติ (Stats)
+-- [2] ตัวแปรควบคุม & สถิติ
 -- ==========================================
 local scriptActive = false 
 local isRightClicking = false
@@ -35,11 +35,11 @@ local startTime = tick()
 local totalKills = 0
 local startMoney = 0
 
--- ดึงค่าเงินเริ่มต้นของผู้เล่น (หากเกมใช้ชื่ออื่นเช่น Credits, Tokens ให้เติมในวงเล็บด้านล่าง)
-local leaderstats = LocalPlayer:WaitForChild("leaderstats", 5)
+-- ดึงค่าเงินเริ่มต้น (เปลี่ยนเป็น FindFirstChild เพื่อไม่ให้สคริปต์ค้างรอ)
+local leaderstats = LocalPlayer:FindFirstChild("leaderstats")
 if leaderstats then
     local stat = leaderstats:FindFirstChild("Cash") or leaderstats:FindFirstChild("Money") or leaderstats:FindFirstChild("Coins") or leaderstats:FindFirstChild("Points")
-    if stat then startMoney = stat.Value end
+    if stat then startMoney = tonumber(stat.Value) or 0 end
 end
 
 -- ==========================================
@@ -48,12 +48,19 @@ end
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "ZombieFarm_StatsUI"
 ScreenGui.ResetOnSpawn = false
-local success = pcall(function() ScreenGui.Parent = CoreGui end)
-if not success then ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
+
+-- วิธีป้องกัน UI หายที่รองรับทุก Executor
+if gethui then
+    ScreenGui.Parent = gethui()
+else
+    local success = pcall(function() ScreenGui.Parent = CoreGui end)
+    if not success then ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
+end
 
 local MainFrame = Instance.new("Frame")
-MainFrame.Size = UDim2.new(0, 300, 0, 260) -- ขยายขนาดเฟรมรองรับข้อมูลใหม่
-MainFrame.Position = UDim2.new(0.5, -150, 0.8, -280)
+MainFrame.Size = UDim2.new(0, 300, 0, 260) 
+-- ปรับให้โผล่ "กลางหน้าจอ" พอดี จะได้หาไม่ยาก
+MainFrame.Position = UDim2.new(0.5, -150, 0.5, -130)
 MainFrame.BackgroundColor3 = Color3.fromRGB(20, 25, 22)
 MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
@@ -103,7 +110,7 @@ local BtnCorner = Instance.new("UICorner")
 BtnCorner.CornerRadius = UDim.new(0, 6)
 BtnCorner.Parent = ToggleBtn
 
--- ฟังก์ชันเปิด/ปิด การฟาร์ม
+-- ฟังก์ชันเปิด/ปิด สคริปต์
 local function toggleScript()
     scriptActive = not scriptActive
     if scriptActive then
@@ -123,7 +130,7 @@ local function toggleScript()
 end
 ToggleBtn.MouseButton1Click:Connect(toggleScript)
 
--- กด Right Shift เพื่อซ่อน/โชว์ หน้าต่าง
+-- กด Right Shift เพื่อซ่อนหน้าต่าง
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if not gameProcessed and input.KeyCode == Enum.KeyCode.RightShift then
         MainFrame.Visible = not MainFrame.Visible 
@@ -139,16 +146,15 @@ task.spawn(function()
         TimeLabel.Text = string.format("⏱️ Time Elapsed: %02d:%02d", mins, secs)
         KillLabel.Text = "💀 Zombies Killed: " .. tostring(totalKills)
         
-        -- ดึงเงินปัจจุบัน
+        -- ดึงเงินปัจจุบัน (แปลงเป็นตัวเลขเสมอเพื่อป้องกัน error)
         local currentMoney = startMoney
         if leaderstats then
             local stat = leaderstats:FindFirstChild("Cash") or leaderstats:FindFirstChild("Money") or leaderstats:FindFirstChild("Coins") or leaderstats:FindFirstChild("Points")
-            if stat then currentMoney = stat.Value end
+            if stat then currentMoney = tonumber(stat.Value) or startMoney end
         else
-            currentMoney = startMoney + (totalKills * 50) -- ตัวเลขจำลองกรณีดึงเงินจากเกมไม่ได้
+            currentMoney = startMoney + (totalKills * 50)
         end
         
-        -- คำนวณเงิน
         local earned = currentMoney - startMoney
         EarnedLabel.Text = "💵 Total Earned: " .. tostring(earned)
         
@@ -205,7 +211,7 @@ local function getVisibleNPCs()
 end
 
 RunService.Heartbeat:Connect(function()
-    -- ระบบเช็กซอมบี้ตายเพื่อบวกเลขคิล
+    -- ระบบนับคิลเมื่อเป้าหมายเลือดเหลือ 0
     if currentTarget then
         local hum = currentTarget:FindFirstChild("Humanoid")
         if not currentTarget:IsDescendantOf(Workspace) or (hum and hum.Health <= 0) then
@@ -217,4 +223,72 @@ RunService.Heartbeat:Connect(function()
     if not scriptActive then return end
 
     local visibleZombies = getVisibleNPCs()
-    local mousePos = UserInputService:GetMouse
+    local mousePos = UserInputService:GetMouseLocation()
+
+    if not isEngaging then
+        if #visibleZombies >= requiredZombieCount then isEngaging = true end
+    end
+
+    if isEngaging then
+        if #visibleZombies > 0 then
+            local target = nil
+            local shortestDistance = math.huge
+
+            for _, zombie in pairs(visibleZombies) do
+                local headPos = Camera:WorldToViewportPoint(zombie.Head.Position)
+                local dist = (Vector2.new(headPos.X, headPos.Y) - mousePos).Magnitude
+                if dist < shortestDistance then
+                    target = zombie
+                    shortestDistance = dist
+                end
+            end
+
+            if target and target:FindFirstChild("Head") then
+                if currentTarget ~= target then
+                    currentTarget = target
+                    lastShootTime = 0 
+                end
+
+                Camera.CFrame = CFrame.new(Camera.CFrame.Position, target.Head.Position)
+
+                if not isRightClicking then
+                    isRightClicking = true
+                    VirtualInputManager:SendMouseButtonEvent(mousePos.X, mousePos.Y, 1, true, game, 0)
+                end
+
+                if tick() - lastShootTime >= shootCooldown then
+                    lastShootTime = tick()
+                    VirtualInputManager:SendMouseButtonEvent(mousePos.X, mousePos.Y, 0, true, game, 0)
+                    task.delay(0.02, function()
+                        VirtualInputManager:SendMouseButtonEvent(mousePos.X, mousePos.Y, 0, false, game, 0)
+                    end)
+                end
+            end
+        else
+            isEngaging = false
+            currentTarget = nil
+            if isRightClicking then
+                isRightClicking = false
+                VirtualInputManager:SendMouseButtonEvent(mousePos.X, mousePos.Y, 1, false, game, 0)
+            end
+        end
+    else
+        if isRightClicking then
+            isRightClicking = false
+            VirtualInputManager:SendMouseButtonEvent(mousePos.X, mousePos.Y, 1, false, game, 0)
+        end
+    end
+end)
+
+-- ==========================================
+-- [5] ระบบกด E อัตโนมัติเก็บของ
+-- ==========================================
+task.spawn(function()
+    while task.wait(0.1) do
+        if scriptActive then
+            VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+            task.wait(0.05)
+            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+        end
+    end
+end)
